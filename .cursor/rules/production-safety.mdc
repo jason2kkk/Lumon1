@@ -1,0 +1,37 @@
+---
+description: 项目已上线，所有改动必须遵守的安全原则
+globs:
+  - "**/*.py"
+  - "**/*.ts"
+  - "**/*.tsx"
+alwaysApply: true
+---
+
+# 生产环境安全原则
+
+本项目已上线给内部团队使用，任何改动必须遵守以下原则：
+
+## 数据安全
+- **禁止** 改动 `data/sessions/` 目录结构或 `fetched_needs.json`、`fetchHistory`、`reports/` 的读写逻辑，除非明确要求
+- **禁止** 缩短 session 过期时间或清理策略，用户数据需长期保留（当前 90 天磁盘 / 4 小时内存）
+- 新增持久化文件（如全局计数器）必须使用 `_safe_json_write` 原子写入
+
+## 功能完整性
+- **禁止** 改动挖掘（fetch）、报告生成（report）、讨论（debate）的核心流程逻辑，除非修 bug 或有明确需求
+- **禁止** 改动 LLM 调用链路（`call_llm`/`call_llm_stream`/`call_for_role`）的参数传递和 session 上下文绑定
+- **禁止** 改动 SSE 事件名称和数据格式，前端依赖这些约定
+
+## API 兼容性
+- **禁止** 删除或重命名已有 API 端点
+- **禁止** 改变已有 API 的响应结构（可新增字段，不可删除或改变已有字段的语义）
+- 新增 API 端点不需要 session 鉴权的，也要考虑性能开销（如遍历所有 session）
+
+## 安全性
+- `.env` 中的 API Key 不得暴露到前端或 API 响应中
+- `X-Session-Id` 必须经过 `_sanitize_session_id` 校验
+- CLI 命令参数必须经过输入校验，防止注入
+
+## 改动流程
+- 改动前先读取相关代码，理解上下文
+- 改动后检查 lint 错误
+- 涉及前端的改动需确保 `npm run build` 通过

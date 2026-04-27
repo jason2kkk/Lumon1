@@ -1,0 +1,14 @@
+services:
+  lumon:
+    build: .
+    container_name: lumon
+    ports:
+      - "8000:8000"
+    env_file:
+      - .env
+    volumes:
+      - lumon-data:/app/data
+    restart: unless-stopped
+
+volumes:
+  lumon-data:

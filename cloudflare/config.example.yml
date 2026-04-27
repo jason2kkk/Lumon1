@@ -1,0 +1,22 @@
+# Cloudflare Named Tunnel（固定域名）示例
+# 1. 安装: https://developers.cloudflare.com/cloudflare-one/connections/connect-apps/install-and-setup/installation/
+# 2. cloudflared tunnel login
+# 3. cloudflared tunnel create lumon
+# 4. 将生成的 <UUID>.json 放到本目录，改名为 credentials.json（已在 .gitignore）
+# 5. 复制本文件为 config.yml，把 tunnel 改为你的隧道 UUID，credentials-file 改为 json 绝对路径
+# 6. cloudflared tunnel --config cloudflare/config.yml run
+#
+# 开发模式：隧道指向 Vite，/api 由 Vite 反代到本机 8000
+# 生产模式：先 frontend/npm run build，再 uvicorn；隧道指向 http://127.0.0.1:8000（单端口）
+#
+# protocol: QUIC 在部分运营商/校园网会超时断连，建议 http2（见 Cloudflare 文档 ports-and-ips）
+protocol: http2
+
+tunnel: REPLACE_WITH_TUNNEL_UUID
+credentials-file: /absolute/path/to/cloudflare/REPLACE_WITH_TUNNEL_UUID.json
+
+ingress:
+  # 固定域名示例（也可用 ./setup-lumon-vbradar.sh 自动生成 config.yml）
+  - hostname: lumon.vbradar.com
+    service: http://127.0.0.1:8000
+  - service: http_status:404
