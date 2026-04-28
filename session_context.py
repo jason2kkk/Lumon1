@@ -112,6 +112,10 @@ class SessionContext:
         self.report_thread: threading.Thread | None = None
         self.report_job: dict = self._empty_report_job()
 
+        # 画像建模任务状态
+        self.persona_lock = threading.Lock()
+        self.persona_job: dict = self._empty_persona_job()
+
         # 辩论状态
         self.debate_state: dict = self._empty_debate_state()
         self.investor_thread: threading.Thread | None = None
@@ -147,6 +151,18 @@ class SessionContext:
             "filename": "",
             "done": False,
             "cursor": 0,
+        }
+
+    @staticmethod
+    def _empty_persona_job() -> dict:
+        return {
+            "active": False,
+            "need_index": -1,
+            "progress": 0,
+            "message": "",
+            "personas": None,
+            "error": "",
+            "done": False,
         }
 
     @staticmethod
@@ -740,6 +756,7 @@ def cleanup_expired_sessions():
             if now - ctx.last_active > MEMORY_EXPIRE_SECONDS
             and not ctx.fetch_job.get("active", False)
             and not ctx.report_job.get("active", False)
+            and not ctx.persona_job.get("active", False)
         ]
         for sid in expired_ids:
             del _sessions[sid]

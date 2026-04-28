@@ -2,7 +2,7 @@ import { useState, useEffect, useRef, useCallback } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
 import {
   Loader2, TrendingUp, MessageSquare,
-  ExternalLink, ArrowRight, AlertCircle, ChevronDown,
+  ExternalLink, AlertCircle, ChevronDown,
   BarChart3,
   CheckCircle2, Quote,
 } from 'lucide-react'
@@ -18,7 +18,7 @@ import type { FetchParams, RedditCategory } from '../api/client'
 import type { Need, FemwcDimension } from '../types'
 import ConfirmDialog from './ConfirmDialog'
 import { HelpButton, FETCH_HELP } from './HelpDialog'
-import { CountUp, ShimmerText, RotatingText, ShineBorder } from './animations'
+import { CountUp, ShimmerText, RotatingText, ShineBorder, InteractiveHoverButton } from './animations'
 
 type FetchMode = 'sentence' | 'keywords' | 'open'
 
@@ -1271,7 +1271,7 @@ export default function FetchView() {
                                 disabled={reportGenIdx !== null}
                                 className="flex items-center gap-1 text-[11px] font-medium text-white bg-accent h-7 px-3 rounded-lg hover:opacity-90 transition-opacity disabled:opacity-50"
                               >
-                                <img src="/book_2_ai_line.png" alt="" className="w-2.5 h-2.5 brightness-0 invert" /> 生成报告
+                                <img src="/book_2_ai_line.png" alt="" className="w-3.5 h-3.5 opacity-90 brightness-0 invert" /> 生成报告
                               </button>
                             ) : (
                               <button
@@ -1281,12 +1281,20 @@ export default function FetchView() {
                                 <Loader2 size={10} className="animate-spin" /> 生成中
                               </button>
                             )}
-                            <button
+                            <InteractiveHoverButton
                               onClick={() => handleSelectAndDebate(i)}
-                              className="flex items-center gap-1 text-[11px] font-medium text-accent border border-accent/30 h-7 px-2.5 rounded-lg hover:bg-accent/5 transition-colors"
+                              icon={<img src="/chat_4_ai_line.png" alt="" className="w-3.5 h-3.5 opacity-90" />}
+                              hoverIcon={<img src="/chat_4_ai_line.png" alt="" className="w-3.5 h-3.5 brightness-0 invert" />}
                             >
-                              {debating ? '继续讨论' : '讨论'} <ArrowRight size={10} />
-                            </button>
+                              {debating ? '继续讨论' : '讨论'}
+                            </InteractiveHoverButton>
+                            <InteractiveHoverButton
+                              onClick={() => { useAppStore.getState().setPersonaNeedIndex(i); setActiveView('personas') }}
+                              icon={<img src="/group_2_line.png" alt="" className="w-3.5 h-3.5 opacity-90" />}
+                              hoverIcon={<img src="/group_2_line.png" alt="" className="w-3.5 h-3.5 brightness-0 invert" />}
+                            >
+                              画像
+                            </InteractiveHoverButton>
                             <div className="flex-1" />
                             <ChevronDown size={13} className={`text-muted transition-transform duration-200 ${isExpanded ? 'rotate-180' : ''}`} />
                           </div>

@@ -60,6 +60,38 @@ export interface Need {
   deep_mine_package?: NeedPackage
 }
 
+export interface PersonaQuote {
+  text: string
+  text_zh: string
+  source_url?: string
+  context?: string
+}
+
+export interface Persona {
+  name: string
+  avatar_seed: string
+  tagline: string
+  bio: string
+  gender: 'male' | 'female'
+  avatar_hint?: string
+  demographics: {
+    age_range: string
+    occupation: string
+    location_hint: string
+    tech_savviness: 'low' | 'medium' | 'high'
+  }
+  goals: string[]
+  frustrations: string[]
+  behaviors: string[]
+  tools_used: string[]
+  willingness_to_pay: string
+  quotes: PersonaQuote[]
+  day_in_life: string
+  priority_rank: string[]
+  switching_trigger: string
+  deal_breaker: string
+}
+
 export interface EngineStatus {
   engine: string
   preference?: string

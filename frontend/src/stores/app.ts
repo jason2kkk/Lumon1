@@ -12,7 +12,7 @@ function normalizeNeeds(needs: Need[]): Need[] {
   }))
 }
 
-export type ActiveView = 'fetch' | 'trending' | 'debate' | 'reports'
+export type ActiveView = 'fetch' | 'trending' | 'debate' | 'reports' | 'personas'
 
 export interface FetchHistoryItem {
   id: string
@@ -108,12 +108,15 @@ interface AppState {
   setReportGenIdx: (idx: number | null) => void
   setReportGenProgress: (p: number) => void
   setReportGenMsg: (msg: string) => void
+
+  personaNeedIndex: number | null
+  setPersonaNeedIndex: (idx: number | null) => void
 }
 
 let messageCounter = 0
 
 const _savedView = (typeof localStorage !== 'undefined' && localStorage.getItem('lumon_active_view')) || 'fetch'
-const _validViews = ['fetch', 'debate', 'reports']
+const _validViews = ['fetch', 'debate', 'reports', 'personas']
 
 export const useAppStore = create<AppState>((set) => ({
   activeView: _validViews.includes(_savedView) ? _savedView as AppState['activeView'] : 'fetch',
@@ -306,4 +309,7 @@ export const useAppStore = create<AppState>((set) => ({
   setReportGenIdx: (idx) => set({ reportGenIdx: idx }),
   setReportGenProgress: (p) => set({ reportGenProgress: p }),
   setReportGenMsg: (msg) => set({ reportGenMsg: msg }),
+
+  personaNeedIndex: null,
+  setPersonaNeedIndex: (idx) => set({ personaNeedIndex: idx }),
 }))

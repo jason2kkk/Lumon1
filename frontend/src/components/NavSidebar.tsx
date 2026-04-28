@@ -10,6 +10,7 @@ const NAV_ITEMS: { id: ActiveView; img: string; label: string }[] = [
   { id: 'fetch', img: '/search_2_ai_line.png', label: '采集需求' },
   { id: 'debate', img: '/chat_4_ai_line.png', label: '讨论需求' },
   { id: 'reports', img: '/book_2_ai_line.png', label: '报告中心' },
+  { id: 'personas', img: '/group_2_line.png', label: '画像建模' },
 ]
 
 export default function NavSidebar() {
@@ -163,11 +164,11 @@ export default function NavSidebar() {
       {stats && (
         <div className="px-5 mb-5 space-y-1">
           <div className="flex items-center gap-2 text-[11px] text-muted/60">
-            <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 shrink-0" />
+            <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${stats.online > 0 ? 'bg-emerald-400 animate-[gentlePulse_1.5s_ease-in-out_infinite]' : 'bg-emerald-400/50'}`} />
             <span>在线 <span className="text-text/70 font-medium tabular-nums">{stats.online}</span> 人</span>
           </div>
           <div className="flex items-center gap-2 text-[11px] text-muted/60">
-            <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${stats.mining > 0 ? 'bg-blue-400 animate-pulse' : 'bg-blue-300/50'}`} />
+            <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${stats.mining > 0 ? 'bg-blue-400 animate-[gentlePulse_1.5s_ease-in-out_infinite]' : 'bg-blue-300/50'}`} />
             <span>挖掘中 <span className="text-text/70 font-medium tabular-nums">{stats.mining}</span> 人</span>
           </div>
           <div className="flex items-center gap-2 text-[11px] text-muted/60">

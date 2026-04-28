@@ -171,6 +171,7 @@ export async function streamFetchNeeds(
   let buffer = ''
 
   let gotDone = false
+  let currentEvent = ''
   try {
     while (true) {
       const { done, value } = await reader.read()
@@ -180,7 +181,6 @@ export async function streamFetchNeeds(
       const lines = buffer.split('\n')
       buffer = lines.pop() || ''
 
-      let currentEvent = ''
       for (const line of lines) {
         if (line.startsWith('event: ')) {
           currentEvent = line.slice(7).trim()
@@ -212,7 +212,6 @@ export async function streamFetchNeeds(
       callbacks.onError?.({ message: String(err) })
     }
   }
-  // Stream ended without a 'done' SSE event (e.g. connection dropped by proxy)
   if (!gotDone && !signal?.aborted) {
     callbacks.onDone?.()
   }
@@ -408,6 +407,7 @@ export async function streamDeepMine(
   const decoder = new TextDecoder()
   let buffer = ''
   let _gotDone = false
+  let currentEvent = ''
 
   try {
     while (true) {
@@ -418,7 +418,6 @@ export async function streamDeepMine(
       const lines = buffer.split('\n')
       buffer = lines.pop() || ''
 
-      let currentEvent = ''
       for (const line of lines) {
         if (line.startsWith('event: ')) {
           currentEvent = line.slice(7).trim()
@@ -523,6 +522,7 @@ export async function streamSSE(
   const decoder = new TextDecoder()
   let buffer = ''
   let gotTerminal = false
+  let currentEvent = ''
 
   try {
     while (true) {
@@ -533,7 +533,6 @@ export async function streamSSE(
       const lines = buffer.split('\n')
       buffer = lines.pop() || ''
 
-      let currentEvent = ''
       for (const line of lines) {
         if (line.startsWith('event: ')) {
           currentEvent = line.slice(7).trim()
@@ -652,6 +651,7 @@ export async function streamGenerateReport(
   const decoder = new TextDecoder()
   let buffer = ''
   let _gotDone = false
+  let currentEvent = ''
 
   try {
     while (true) {
@@ -662,7 +662,6 @@ export async function streamGenerateReport(
       const lines = buffer.split('\n')
       buffer = lines.pop() || ''
 
-      let currentEvent = ''
       for (const line of lines) {
         if (line.startsWith('event: ')) {
           currentEvent = line.slice(7).trim()
@@ -726,6 +725,7 @@ export function streamReportGenResume(
       const decoder = new TextDecoder()
       let buffer = ''
       let _gotDone = false
+      let currentEvent = ''
       try {
         while (true) {
           const { done, value } = await reader.read()
@@ -733,7 +733,6 @@ export function streamReportGenResume(
           buffer += decoder.decode(value, { stream: true })
           const lines = buffer.split('\n')
           buffer = lines.pop() || ''
-          let currentEvent = ''
           for (const line of lines) {
             if (line.startsWith('event: ')) {
               currentEvent = line.slice(7).trim()
@@ -865,4 +864,80 @@ export function runPocEvaluation(input: PocEvalInput & { report_filename?: strin
 
 export function getPocEvalResult(evalId: string) {
   return json<PocEvalResult>(`/poc-evaluate/${evalId}`)
+}
+
+// ===== 用户画像建模 =====
+
+export interface PersonaCallbacks {
+  onProgress?: (data: { progress: number; message: string }) => void
+  onDone?: (data: { personas: unknown[] }) => void
+  onError?: (data: { message: string }) => void
+}
+
+export async function streamGeneratePersonas(
+  needIndex: number,
+  callbacks: PersonaCallbacks,
+  signal?: AbortSignal,
+) {
+  let res: Response
+  try {
+    res = await fetch(BASE + '/generate-personas', {
+      method: 'POST',
+      headers: sessionHeaders({ 'Content-Type': 'application/json' }),
+      body: JSON.stringify({ need_index: needIndex }),
+      signal,
+    })
+  } catch (err) {
+    if (signal?.aborted) return
+    callbacks.onError?.({ message: String(err) })
+    return
+  }
+
+  if (!res.ok || !res.body) {
+    const errText = await res.text().catch(() => `HTTP ${res.status}`)
+    callbacks.onError?.({ message: errText })
+    return
+  }
+
+  const reader = res.body.getReader()
+  const decoder = new TextDecoder()
+  let buffer = ''
+  let currentEvent = ''
+
+  try {
+    while (true) {
+      const { done, value } = await reader.read()
+      if (done) break
+
+      buffer += decoder.decode(value, { stream: true })
+      const lines = buffer.split('\n')
+      buffer = lines.pop() || ''
+
+      for (const line of lines) {
+        if (line.startsWith('event: ')) {
+          currentEvent = line.slice(7).trim()
+        } else if (line.startsWith('data: ')) {
+          try {
+            const data = JSON.parse(line.slice(6))
+            switch (currentEvent) {
+              case 'persona_progress':
+                callbacks.onProgress?.(data)
+                break
+              case 'persona_done':
+                callbacks.onDone?.(data)
+                break
+              case 'persona_error':
+                callbacks.onError?.(data)
+                break
+            }
+          } catch { /* skip malformed */ }
+          currentEvent = ''
+        }
+      }
+    }
+  } catch (err) {
+    if (!signal?.aborted) {
+      callbacks.onError?.({ message: String(err) })
+    }
+  }
 }

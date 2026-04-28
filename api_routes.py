@@ -4583,3 +4583,478 @@ def online_stats():
                 if ctx.fetch_job.get("active"):
                     mining += 1
     return {"online": online, "mining": mining, "needs": _read_global_needs_count()}
+
+
+# ============================================================
+# 外部 CLI 数据接口 — SensorTower
+# 供同事通过 HTTP 直接调用，需携带 X-API-Key header
+# 与内部业务端点隔离：独立路径前缀 /cli/st、独立并发控制
+# ============================================================
+
+import asyncio as _cli_asyncio
+from concurrent.futures import ThreadPoolExecutor as _CliThreadPool
+
+# ---------- API Key 认证 ----------
+
+def _verify_cli_api_key(request: Request):
+    """校验外部接口的 API Key，无效则拒绝。"""
+    expected = os.getenv("CLI_API_KEY", "")
+    if not expected:
+        raise HTTPException(status_code=503, detail="CLI_API_KEY 未配置，接口不可用")
+    provided = request.headers.get("x-api-key", "")
+    if not provided or provided != expected:
+        raise HTTPException(status_code=401, detail="无效的 API Key")
+
+
+# ---------- 并发控制 & 调用统计 ----------
+
+_cli_st_semaphore = threading.Semaphore(1)
+_cli_st_pool = _CliThreadPool(max_workers=2, thread_name_prefix="cli-st")
+
+_cli_st_stats: dict[str, dict] = {
+    "status": {"calls": 0, "last_call": 0.0},
+    "app": {"calls": 0, "last_call": 0.0},
+    "landscape": {"calls": 0, "last_call": 0.0},
+    "market": {"calls": 0, "last_call": 0.0},
+}
+
+def _cli_st_record(endpoint: str):
+    _cli_st_stats[endpoint]["calls"] += 1
+    _cli_st_stats[endpoint]["last_call"] = _time.time()
+
+
+def _cli_st_acquire_or_reject():
+    """尝试获取信号量，获取不到直接返回 429。"""
+    acquired = _cli_st_semaphore.acquire(blocking=False)
+    if not acquired:
+        raise HTTPException(
+            status_code=429,
+            detail="当前有其他请求正在处理，请稍后重试（同一时间仅允许 1 个外部 ST 请求）",
+        )
+
+
+# ---------- 请求模型 ----------
+
+class CliStAppRequest(BaseModel):
+    query: str  # App 名称或 App Store URL
+
+
+class CliStLandscapeRequest(BaseModel):
+    competitors: list[dict]  # [{"name": "Duolingo", "url": "https://..."}, ...]
+    limit: int = 5
+
+
+class CliStMarketRequest(BaseModel):
+    mode: str  # "category" | "niche" | "product"
+    category_id: int | None = None
+    queries: list[str] | None = None
+    top_n: int = 20
+    product_name: str | None = None
+    category_queries: list[str] | None = None
+    peer_count: int = 8
+
+
+# ---------- 端点 ----------
+
+@router.get("/cli/st/status")
+def cli_st_status(request: Request):
+    """外部接口：检测 st-cli 可用状态 + 调用统计。"""
+    _verify_cli_api_key(request)
+    _cli_st_record("status")
+
+    from st_client import check_available as _st_check
+    status = _st_check()
+
+    return {
+        "ok": True,
+        "data": {
+            "installed": status.get("installed", False),
+            "available": status.get("available", False),
+            "api_ok": status.get("api_ok", False),
+            "credential_source": status.get("credential_source", ""),
+            "error": status.get("error", ""),
+        },
+        "stats": {k: v.copy() for k, v in _cli_st_stats.items()},
+    }
+
+
+@router.post("/cli/st/app")
+async def cli_st_app(body: CliStAppRequest, request: Request):
+    """外部接口：查询单个 App 的 SensorTower 数据。"""
+    _verify_cli_api_key(request)
+    _cli_st_record("app")
+    _cli_st_acquire_or_reject()
+
+    try:
+        from st_client import fetch_app as _st_fetch_app
+        loop = _cli_asyncio.get_event_loop()
+        result = await loop.run_in_executor(_cli_st_pool, _st_fetch_app, body.query)
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"ST 查询失败: {e}")
+    finally:
+        _cli_st_semaphore.release()
+
+    if result is None:
+        return {"ok": False, "error": "未找到匹配的 App 或 SensorTower 返回为空", "data": None}
+    return {"ok": True, "data": result}
+
+
+@router.post("/cli/st/landscape")
+async def cli_st_landscape(body: CliStLandscapeRequest, request: Request):
+    """外部接口：批量查询竞品 SensorTower 数据（重量级，最多 180 秒）。"""
+    _verify_cli_api_key(request)
+
+    if not body.competitors:
+        raise HTTPException(status_code=400, detail="competitors 不能为空")
+    if body.limit < 1 or body.limit > 10:
+        raise HTTPException(status_code=400, detail="limit 范围 1-10")
+
+    _cli_st_record("landscape")
+    _cli_st_acquire_or_reject()
+
+    try:
+        from st_client import fetch_landscape as _st_landscape
+        loop = _cli_asyncio.get_event_loop()
+        result = await loop.run_in_executor(
+            _cli_st_pool,
+            lambda: _st_landscape(body.competitors, limit=body.limit),
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"ST landscape 查询失败: {e}")
+    finally:
+        _cli_st_semaphore.release()
+
+    return {"ok": True, "data": result}
+
+
+@router.post("/cli/st/market")
+async def cli_st_market(body: CliStMarketRequest, request: Request):
+    """外部接口：品类/细分赛道/产品竞品的市场数据。"""
+    _verify_cli_api_key(request)
+
+    if body.mode == "category":
+        if body.category_id is None:
+            raise HTTPException(status_code=400, detail="category 模式需要 category_id")
+    elif body.mode == "niche":
+        if not body.queries:
+            raise HTTPException(status_code=400, detail="niche 模式需要 queries（关键词列表）")
+    elif body.mode == "product":
+        if not body.product_name or not body.category_queries:
+            raise HTTPException(status_code=400, detail="product 模式需要 product_name 和 category_queries")
+    else:
+        raise HTTPException(status_code=400, detail=f"不支持的 mode: {body.mode}，可选: category / niche / product")
+
+    _cli_st_record("market")
+    _cli_st_acquire_or_reject()
+
+    try:
+        from st_client import (
+            fetch_category_market_data as _st_category,
+            fetch_niche_market_data as _st_niche,
+            fetch_product_with_peers as _st_product,
+        )
+        loop = _cli_asyncio.get_event_loop()
+
+        if body.mode == "category":
+            result = await loop.run_in_executor(
+                _cli_st_pool,
+                lambda: _st_category(body.category_id, top_n=body.top_n),
+            )
+        elif body.mode == "niche":
+            result = await loop.run_in_executor(
+                _cli_st_pool,
+                lambda: _st_niche(body.queries, top_n=body.top_n),
+            )
+        else:
+            result = await loop.run_in_executor(
+                _cli_st_pool,
+                lambda: _st_product(body.product_name, body.category_queries, peer_count=body.peer_count),
+            )
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"ST market 查询失败: {e}")
+    finally:
+        _cli_st_semaphore.release()
+
+    if result is None:
+        return {"ok": False, "error": "未找到数据或 SensorTower 返回为空", "data": None}
+    return {"ok": True, "data": result}
+
+
+# ============================================================
+# 用户画像建模
+# ============================================================
+
+class PersonaRequest(BaseModel):
+    need_index: int
+
+@router.post("/generate-personas")
+def generate_personas(req: PersonaRequest, request: Request):
+    """基于需求主题下的真实帖子，用 LLM 两步法建模 2-4 个典型用户画像。SSE 流式返回。"""
+    ctx = _get_session(request)
+    needs_data = get_needs(request)["needs"]
+    if req.need_index < 0 or req.need_index >= len(needs_data):
+        raise HTTPException(status_code=400, detail="无效的需求索引")
+
+    need = needs_data[req.need_index]
+
+    # 检查 LLM 可用性
+    set_thread_session(ctx)
+    try:
+        llm_ok, llm_err = check_llm_available()
+    finally:
+        clear_thread_session()
+    if not llm_ok:
+        model_name = "GPT" if ctx._general_model == "gpt" else "Claude"
+        def _err():
+            yield _sse("error", {"message": f"{model_name} 模型不可用，请前往「设置」检查配置"})
+        return StreamingResponse(_err(), media_type="text/event-stream")
+
+    def _format_posts_for_persona(need_data: dict) -> str:
+        """将帖子格式化为画像建模的上下文素材。"""
+        lines = []
+        for i, post in enumerate(need_data.get("posts", []), 1):
+            lines.append(f"### 帖子 {i}: {post.get('title', '')}")
+            lines.append(f"- 来源: {post.get('source', 'unknown')}")
+            lines.append(f"- 赞数: {post.get('score', 0)} | 评论数: {post.get('num_comments', 0)}")
+            content = post.get("content", "")
+            if content:
+                lines.append(f"- 内容: {content[:1200]}")
+            comments = post.get("comments", [])
+            if comments:
+                lines.append("- 用户评论:")
+                for c in comments[:10]:
+                    lines.append(f"  > {c[:400]}")
+            lines.append("")
+        return "\n".join(lines)
+
+    posts_text = _format_posts_for_persona(need)
+
+    # 初始化 persona_job
+    with ctx.persona_lock:
+        ctx.persona_job = ctx._empty_persona_job()
+        ctx.persona_job["active"] = True
+        ctx.persona_job["need_index"] = req.need_index
+
+    def _update_progress(progress: int, message: str):
+        with ctx.persona_lock:
+            ctx.persona_job["progress"] = progress
+            ctx.persona_job["message"] = message
+
+    def _run_persona_bg():
+        set_thread_session(ctx)
+        try:
+            # ===== Step 1: 聚类分析 — 识别用户群体 =====
+            _update_progress(10, "正在分析用户发言，识别行为模式...")
+
+            step1_prompt = f"""你是一位资深的用户研究专家。以下是围绕「{need.get('need_title', '')}」这一需求主题收集的真实用户帖子和评论。
+
+## 需求描述
+{need.get('need_description', '')}
+
+## 真实帖子数据
+{posts_text}
+
+## 任务
+请仔细阅读以上所有帖子和评论，识别出 2-4 个行为模式、动机、背景明显不同的用户群体。
+
+要求：
+1. 每个群体必须有明确不同的特征（不要只是年龄不同，要在动机、行为、痛点上有质的差异）
+2. 群体划分必须有帖子/评论中的真实证据支撑
+3. 为每个群体提供一个简短标签和核心特征关键词
+
+请以 JSON 格式输出：
+```json
+{{
+  "groups": [
+    {{
+      "label": "群体简短标签",
+      "core_traits": ["特征1", "特征2", "特征3"],
+      "motivation": "核心动机描述",
+      "evidence_posts": [1, 3, 5]
+    }}
+  ]
+}}
+```"""
+
+            step1_result = call_llm([
+                {"role": "system", "content": "你是用户研究专家，擅长从定性数据中识别用户群体。严格输出 JSON。"},
+                {"role": "user", "content": step1_prompt},
+            ], max_tokens=4000)
+
+            _update_progress(30, "聚类分析完成，开始建模画像...")
+
+            groups_data = _parse_json_from_text(step1_result)
+            if not groups_data or "groups" not in groups_data:
+                # 降级：直接生成画像，不依赖聚类结果
+                groups_data = {"groups": [
+                    {"label": "核心用户", "core_traits": ["高频使用者"], "motivation": "解决核心痛点"},
+                    {"label": "潜在用户", "core_traits": ["有需求但未行动"], "motivation": "寻找解决方案"},
+                ]}
+
+            groups = groups_data["groups"][:4]
+
+            # ===== Step 2: 为每个群体生成完整画像 =====
+            _update_progress(40, f"正在为 {len(groups)} 个用户群体建模详细画像...")
+
+            groups_desc = "\n".join([
+                f"- 群体{i+1}「{g.get('label', '')}」: {', '.join(g.get('core_traits', []))} — {g.get('motivation', '')}"
+                for i, g in enumerate(groups)
+            ])
+
+            step2_prompt = f"""你是一位资深用户研究专家，现在需要为以下用户群体建模详细的用户画像。
+
+## 需求主题
+标题：{need.get('need_title', '')}
+描述：{need.get('need_description', '')}
+
+## 识别到的用户群体
+{groups_desc}
+
+## 真实帖子数据（作为画像素材）
+{posts_text}
+
+## 任务
+为每个群体生成一个鲜活、具体的用户画像（Persona）。每个画像必须像一个真实的人，让产品经理读完后能在脑海里浮现这个人的形象。
+
+## 核心原则
+- 画像必须符合其所在地区的真实生活习惯（如北美用户的作息、通勤方式、社交习惯与中国用户截然不同）
+- 性别必须明确，所有描述、人设、行为都要与性别一致
+- 不同画像之间要有明显差异，覆盖不同的用户类型
+
+要求：
+1. name：英文名 + 年龄 + 职业（如 "Alex, 28, 前端工程师"），名字要符合性别
+2. gender：明确指定 "male" 或 "female"，画像群体中男女应合理分布
+3. avatar_hint：用英文描述此人的外貌特征，方便匹配头像（如 "young white male, brown hair, glasses" 或 "middle-aged asian female, professional"）
+4. tagline：一句话中文人设标签，要有画面感（如 "被照片淹没的记录强迫症患者"）
+5. bio：一句中文描述这个人是什么样的人，所有代词和描述要与性别一致
+6. demographics：中文人口特征（age_range/occupation/location_hint/tech_savviness）
+7. goals/frustrations：**必须用中文**，不要输出英文！基于真实帖子内容概括成中文痛点和目标，不要直接复制英文原文
+8. quotes：从帖子中提取 2-3 条最能代表此画像的原文（text 保留英文原文），同时提供 text_zh（准确的中文翻译，不要机翻味），如果帖子数据中有 URL 则提供 source_url
+9. day_in_life：中文，以第一人称写，用时间线格式（每个时间段换行，格式为 "HH:MM - 内容"），覆盖从早到晚 8-12 个时间节点，每个节点 2-4 句话。要求：
+   - 深度结合需求主题，每个时间点都要体现这个需求/痛点在用户日常中的具体表现
+   - 当叙事中出现与需求主题直接相关的关键短语时，用 **双星号** 将其加粗（如"我总想**把信息放进一个能随时搜到的地方**"）
+   - 符合当地的生活习惯（如北美用户开车通勤、用 Slack 沟通、吃三明治午餐等，不要出现与当地文化不符的细节）
+   - 描写情绪变化和心理活动，让读者能感同身受
+   - 嵌入 2-3 条来自帖子的真实引用，自然融入叙事中
+10. switching_trigger/deal_breaker：中文
+
+请以 JSON 数组格式输出所有画像：
+```json
+[
+  {{
+    "name": "Alex, 28, 前端工程师",
+    "avatar_seed": "alex-28-engineer",
+    "gender": "male",
+    "avatar_hint": "young white male, brown hair, casual",
+    "tagline": "一句话人设标签",
+    "bio": "一句话描述这个人是什么样的人",
+    "demographics": {{
+      "age_range": "25-32",
+      "occupation": "前端工程师",
+      "location_hint": "北美",
+      "tech_savviness": "high"
+    }},
+    "goals": ["中文目标1", "中文目标2"],
+    "frustrations": ["中文痛点1", "中文痛点2"],
+    "behaviors": ["行为1", "行为2"],
+    "tools_used": ["工具1", "工具2"],
+    "willingness_to_pay": "付费意愿描述",
+    "quotes": [
+      {{"text": "Original English quote from post", "text_zh": "准确的中文翻译", "source_url": "https://reddit.com/r/..."}}
+    ],
+    "day_in_life": "07:00 - 闹钟响了，我从床上爬起来...\n07:30 - 洗漱完毕，打开笔记本，我总想**把信息放进一个能随时搜到的地方**...\n09:00 - 开车到公司...\n10:30 - 晨会结束后...\n12:30 - 午餐时间...\n14:00 - 下午第一个会议...\n16:00 - 又遇到了老问题...\n18:00 - 收拾东西准备下班...\n19:30 - 到家后...\n21:00 - 坐在沙发上...\n23:00 - 睡前刷手机...",
+    "priority_rank": ["需求1", "需求2", "需求3"],
+    "switching_trigger": "什么会让 TA 换产品",
+    "deal_breaker": "绝对不能接受什么"
+  }}
+]
+```"""
+
+            _update_progress(50, "正在深度建模用户画像，预计 30-40 秒...")
+
+            step2_result = call_llm([
+                {"role": "system", "content": "你是用户研究专家，擅长建模鲜活的用户画像。基于真实数据，不要编造。严格输出 JSON 数组。goals、frustrations、tagline、bio、day_in_life、demographics 等所有字段必须用中文，绝对不能出现英文！唯一例外：quotes 中的 text 保留英文原文并附 text_zh 中文翻译，avatar_hint 用英文。day_in_life 中与需求相关的关键短语请用 **双星号** 加粗。"},
+                {"role": "user", "content": step2_prompt},
+            ], max_tokens=12000)
+
+            _update_progress(85, "画像生成完成，正在解析结果...")
+
+            personas = _parse_json_from_text(step2_result)
+            if personas is None:
+                with ctx.persona_lock:
+                    ctx.persona_job["error"] = "画像生成结果解析失败，请重试"
+                    ctx.persona_job["active"] = False
+                return
+
+            # 兼容两种格式：直接数组或包在对象里
+            if isinstance(personas, dict):
+                personas = personas.get("personas", [])
+            if not isinstance(personas, list) or len(personas) == 0:
+                with ctx.persona_lock:
+                    ctx.persona_job["error"] = "未能生成有效画像，请重试"
+                    ctx.persona_job["active"] = False
+                return
+
+            _update_progress(95, "整理画像数据...")
+
+            # 持久化到 session 目录
+            persona_file = ctx.data_dir / f"personas_{req.need_index}_{int(_time.time())}.json"
+            _safe_json_write(persona_file, {
+                "need_index": req.need_index,
+                "need_title": need.get("need_title", ""),
+                "personas": personas,
+                "created_at": datetime.now().isoformat(),
+            })
+
+            with ctx.persona_lock:
+                ctx.persona_job["personas"] = personas
+                ctx.persona_job["progress"] = 100
+                ctx.persona_job["message"] = "画像建模完成！"
+                ctx.persona_job["done"] = True
+                ctx.persona_job["active"] = False
+
+        except Exception as e:
+            with ctx.persona_lock:
+                ctx.persona_job["error"] = f"画像生成失败：{str(e)}"
+                ctx.persona_job["active"] = False
+
+    t = threading.Thread(target=_run_persona_bg, daemon=True)
+    t.start()
+
+    # SSE 流：从 persona_job 读取状态
+    def event_stream() -> Generator[str, None, None]:
+        _last_progress = -1
+        while True:
+            with ctx.persona_lock:
+                job = ctx.persona_job
+                progress = job["progress"]
+                message = job["message"]
+                error = job["error"]
+                done = job["done"]
+                personas = job["personas"]
+
+            if error:
+                yield _sse("persona_error", {"message": error})
+                return
+
+            if progress != _last_progress and message:
+                yield _sse("persona_progress", {"progress": progress, "message": message})
+                _last_progress = progress
+
+            if done and personas is not None:
+                yield _sse("persona_done", {"personas": personas})
+                yield "\n"
+                return
+
+            if not job["active"] and not done:
+                return
+
+            _time.sleep(0.5)
+
+    return StreamingResponse(event_stream(), media_type="text/event-stream")

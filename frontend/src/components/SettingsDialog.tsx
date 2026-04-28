@@ -13,7 +13,7 @@ const BASE = '/api'
 
 interface TestResult { ok: boolean; message: string }
 
-type SettingsSection = 'models' | 'websearch' | 'sources' | 'cli' | 'roles' | 'feishu' | 'guide'
+type SettingsSection = 'models' | 'websearch' | 'sources' | 'cli' | 'roles' | 'feishu' | 'guide' | 'changelog'
 
 const SECTIONS: { id: SettingsSection; label: string; img: string; desc: string }[] = [
   { id: 'models', label: '模型配置', img: '/head_ai_line.png', desc: 'Claude / GPT API 设置' },
@@ -22,6 +22,7 @@ const SECTIONS: { id: SettingsSection; label: string; img: string; desc: string 
   { id: 'roles', label: '角色分配', img: '/group_3_line.png', desc: '导演 / 产品经理 / 杠精 模型选择' },
   { id: 'feishu', label: '飞书集成', img: '/link_3_line.png', desc: '一键导出报告为飞书在线文档' },
   { id: 'sources', label: '采集数据源', img: '/chart_line_line.png', desc: '选择挖掘时要采集的社区平台' },
+  { id: 'changelog', label: '更新日志', img: '/celebrate_line.png', desc: '版本更新记录' },
   { id: 'guide', label: '使用说明', img: '/question_line.png', desc: '产品原理与核心流程说明' },
 ]
 
@@ -1094,6 +1095,47 @@ export default function SettingsDialog() {
     </div>
   )
 
+  const renderChangelog = () => {
+    const logs: { version: string; date: string; items: string[] }[] = [
+      {
+        version: '1.1.0',
+        date: '2025-04-28',
+        items: [
+          '全面适配移动端',
+          '新增「画像建模」功能',
+          '优化部分体验',
+        ],
+      },
+      {
+        version: '1.0.0',
+        date: '2025-04-27',
+        items: [
+          '首个正式版本发布',
+        ],
+      },
+    ]
+
+    return (
+      <div className="space-y-3">
+        {logs.map((log) => (
+          <div key={log.version} className="bg-bg/50 rounded-xl px-4 py-3">
+            <div className="flex items-center gap-2 mb-1.5">
+              <span className="text-[12px] font-semibold text-text tabular-nums">{log.version}</span>
+              <span className="text-[10px] text-muted/50">{log.date}</span>
+            </div>
+            <ul className="space-y-0.5">
+              {log.items.map((item, i) => (
+                <li key={i} className="text-[12px] text-text/65 leading-relaxed flex gap-2 items-start">
+                  <span className="w-1.5 h-1.5 rounded-full bg-text/25 shrink-0 mt-[6px]" />{item}
+                </li>
+              ))}
+            </ul>
+          </div>
+        ))}
+      </div>
+    )
+  }
+
   return (
     <AnimatePresence>
       {showSettingsDialog && (
@@ -1181,6 +1223,7 @@ export default function SettingsDialog() {
               {activeSection === 'cli' && renderCli()}
               {activeSection === 'roles' && renderRoles()}
               {activeSection === 'feishu' && renderFeishu()}
+              {activeSection === 'changelog' && renderChangelog()}
               {activeSection === 'guide' && renderGuide()}
             </div>
 

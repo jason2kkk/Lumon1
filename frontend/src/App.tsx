@@ -5,8 +5,10 @@ import FetchView from './components/FetchView'
 import ChatPanel from './components/ChatPanel'
 import DetailPanel from './components/DetailPanel'
 import ReportsView from './components/ReportsView'
+import PersonaView from './components/PersonaView'
 // import TrendingView from './components/TrendingView'
 import SettingsDialog from './components/SettingsDialog'
+import WhatsNewModal from './components/WhatsNewModal'
 import ResizeHandle from './components/ResizeHandle'
 import { useAppStore } from './stores/app'
 
@@ -110,10 +112,19 @@ export default function App() {
               <ReportsView />
             </motion.div>
           )}
+
+          {activeView === 'personas' && (
+            <motion.div key="personas" {...viewTransition}
+              className="flex-1 min-w-0 min-h-0 bg-card rounded-3xl overflow-hidden shadow-sm max-md:rounded-none max-md:shadow-none max-md:bg-[#faf8f5]"
+            >
+              <PersonaView />
+            </motion.div>
+          )}
         </AnimatePresence>
       </div>
 
       <SettingsDialog />
+      <WhatsNewModal />
     </ErrorBoundary>
   )
 }
