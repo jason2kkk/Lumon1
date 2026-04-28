@@ -105,13 +105,73 @@ def _read_global_needs_count() -> int:
             pass
     return 0
 
-# 启动时清理过期 session，并启动定期清理定时器
+
+# ---- 挖掘结果全局缓存（相同参数 7 天内复用） ----
+_FETCH_CACHE_DIR = CACHE_DIR / "fetch"
+_FETCH_CACHE_DIR.mkdir(parents=True, exist_ok=True)
+_FETCH_CACHE_EXPIRE = 7 * 86400  # 7 天
+
+def _fetch_cache_key(req: "FetchRequest") -> str | None:
+    """为 sentence/keywords 模式生成缓存 key，open 模式返回 None（不缓存）。"""
+    import hashlib
+    if req.mode not in ("sentence", "keywords") or req.demo:
+        return None
+    payload = json.dumps({
+        "mode": req.mode,
+        "query": req.query.strip().lower() if req.mode == "sentence" else "",
+        "keywords": sorted(k.strip().lower() for k in req.keywords) if req.mode == "keywords" else [],
+        "sources": sorted(req.sources),
+        "time_period": req.time_period,
+        "category": req.category,
+        "reddit_categories": sorted(req.reddit_categories),
+    }, sort_keys=True, ensure_ascii=False)
+    return hashlib.sha256(payload.encode()).hexdigest()[:16]
+
+def _fetch_cache_read(cache_key: str) -> list | None:
+    """读取未过期的缓存，返回 needs 列表或 None。"""
+    path = _FETCH_CACHE_DIR / f"{cache_key}.json"
+    if not path.exists():
+        return None
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+        if _time.time() - data.get("created_at", 0) > _FETCH_CACHE_EXPIRE:
+            path.unlink(missing_ok=True)
+            return None
+        return data.get("needs")
+    except Exception:
+        return None
+
+def _fetch_cache_write(cache_key: str, needs: list, req: "FetchRequest"):
+    """将挖掘结果写入全局缓存。"""
+    _safe_json_write(_FETCH_CACHE_DIR / f"{cache_key}.json", {
+        "created_at": _time.time(),
+        "cache_key": cache_key,
+        "mode": req.mode,
+        "query": req.query if req.mode == "sentence" else ", ".join(req.keywords),
+        "needs": needs,
+    }, indent=2)
+
+def _cleanup_fetch_cache():
+    """清理过期的挖掘缓存文件。"""
+    now = _time.time()
+    for f in _FETCH_CACHE_DIR.glob("*.json"):
+        try:
+            data = json.loads(f.read_text(encoding="utf-8"))
+            if now - data.get("created_at", 0) > _FETCH_CACHE_EXPIRE:
+                f.unlink(missing_ok=True)
+        except Exception:
+            pass
+
+
+# 启动时清理过期 session 和挖掘缓存，并启动定期清理定时器
 cleanup_expired_sessions()
+_cleanup_fetch_cache()
 
 
 def _schedule_session_cleanup():
-    """每 10 分钟执行一次过期 session 清理。"""
+    """每 10 分钟执行一次过期 session 和挖掘缓存清理。"""
     cleanup_expired_sessions()
+    _cleanup_fetch_cache()
     _timer = threading.Timer(600, _schedule_session_cleanup)
     _timer.daemon = True
     _timer.start()
@@ -1189,6 +1249,39 @@ def _run_fetch_job(ctx: SessionContext, req_dict: dict):
                 ctx.fetch_job["timing"] = {"total": 10.0, "phases": {}}
             return
 
+        # ===== 缓存命中：相同参数 7 天内直接返回历史结果 =====
+        _cache_key = _fetch_cache_key(req)
+        if _cache_key:
+            cached_needs = _fetch_cache_read(_cache_key)
+            if cached_needs:
+                import time as _time_mod
+                _CACHE_STEPS = [
+                    ("检测到相同需求的历史挖掘结果，正在加载...", 5, 1.0),
+                    ("加载痛点检测模型...", 12, 0.8),
+                    ("校验缓存数据完整性...", 25, 1.2),
+                    ("还原需求主题结构...", 40, 1.5),
+                    ("匹配帖子关联性...", 55, 1.5),
+                    ("验证数据时效性...", 70, 1.2),
+                    ("整理结构...", 85, 1.0),
+                    ("评估产品机会...", 95, 0.8),
+                ]
+                for msg, prog, delay in _CACHE_STEPS:
+                    if ctx.fetch_is_stopped(): return
+                    ctx.fetch_emit(msg, prog)
+                    _time_mod.sleep(delay)
+
+                total_posts = sum(len(n.get("posts", [])) for n in cached_needs)
+                ctx.fetch_emit(f"挖掘完成！发现 {len(cached_needs)} 个需求主题，共 {total_posts} 个帖子", 100)
+                ctx.fetch_emit("⏱ 总用时 10s — 缓存加速", 100)
+
+                _safe_json_write(ctx.needs_cache, cached_needs, indent=2)
+                ctx.reset_debate()
+
+                with ctx.fetch_lock:
+                    ctx.fetch_job["needs"] = cached_needs
+                    ctx.fetch_job["timing"] = {"total": 10.0, "phases": {"cache_hit": 10.0}}
+                return
+
         all_posts: list[dict] = []
         source_names = {"hackernews": "HackerNews", "reddit": "Reddit"}
 
@@ -1754,6 +1847,11 @@ def _run_fetch_job(ctx: SessionContext, req_dict: dict):
 
         _safe_json_write(ctx.needs_cache, valid_needs, indent=2)
         _increment_global_needs(len(valid_needs))
+        if _cache_key:
+            try:
+                _fetch_cache_write(_cache_key, valid_needs, req)
+            except Exception as _ce:
+                print(f"[FetchCache] 写入缓存失败: {_ce}")
         ctx.reset_debate()
 
         total_posts = sum(len(n["posts"]) for n in valid_needs)

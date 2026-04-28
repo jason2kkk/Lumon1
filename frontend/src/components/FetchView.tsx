@@ -65,18 +65,49 @@ export default function FetchView() {
     autoStartFetch, setAutoStartFetch,
   } = useAppStore()
 
-  const autoStartRef = useRef(false)
+  const typewriterTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const typewriterActiveRef = useRef(false)
+  const [pendingAutoFetch, setPendingAutoFetch] = useState(false)
 
   useEffect(() => {
-    if (prefillFetchQuery) {
-      setMode('sentence')
-      setSentence(prefillFetchQuery)
-      setPrefillFetchQuery(null)
-      if (autoStartFetch) {
-        autoStartRef.current = true
-        setAutoStartFetch(false)
+    if (!prefillFetchQuery) return
+    const fullText = prefillFetchQuery
+    const shouldAutoStart = autoStartFetch
+    setPrefillFetchQuery(null)
+    setAutoStartFetch(false)
+
+    // 取消上一轮未完成的打字动画
+    typewriterActiveRef.current = false
+    if (typewriterTimerRef.current) {
+      clearTimeout(typewriterTimerRef.current)
+      typewriterTimerRef.current = null
+    }
+
+    setMode('sentence')
+    setSentence('')
+    typewriterActiveRef.current = true
+
+    let i = 0
+    const tick = () => {
+      if (!typewriterActiveRef.current) return
+      i++
+      setSentence(fullText.slice(0, i))
+      if (i < fullText.length) {
+        typewriterTimerRef.current = setTimeout(tick, 50)
+      } else {
+        typewriterActiveRef.current = false
+        typewriterTimerRef.current = null
+        if (shouldAutoStart) {
+          // 打字完毕后停顿 600ms，再触发自动挖掘
+          typewriterTimerRef.current = setTimeout(() => {
+            typewriterTimerRef.current = null
+            setPendingAutoFetch(true)
+          }, 600)
+        }
       }
     }
+    typewriterTimerRef.current = setTimeout(tick, 300)
+    // 不设 cleanup return — refs 跨 StrictMode 双重执行存活，靠 typewriterActiveRef 控制停止
   }, [prefillFetchQuery, setPrefillFetchQuery, autoStartFetch, setAutoStartFetch])
 
   const isViewingHistory = activeFetchHistoryId !== null
@@ -367,13 +398,6 @@ export default function FetchView() {
 
   const [fetchHint, setFetchHint] = useState('')
 
-  useEffect(() => {
-    if (autoStartRef.current && sentence.trim() && !loading && !fetchingRef.current) {
-      autoStartRef.current = false
-      setTimeout(() => handleFetch(), 100)
-    }
-  }, [sentence])
-
   const handleFetch = () => {
     if (loading || fetchingRef.current) return
     if (!canFetch()) {
@@ -398,6 +422,13 @@ export default function FetchView() {
     }
     doFetch()
   }
+
+  useEffect(() => {
+    if (pendingAutoFetch && sentence.trim() && !loading && !fetchingRef.current && !typewriterActiveRef.current) {
+      setPendingAutoFetch(false)
+      handleFetch()
+    }
+  }, [pendingAutoFetch])
 
   const doFetch = async (options?: { demo?: boolean }) => {
     const isDemo = options?.demo ?? false
@@ -533,6 +564,14 @@ export default function FetchView() {
   }
 
   const handleAbort = () => {
+    // 取消打字动画和待触发的自动挖掘
+    typewriterActiveRef.current = false
+    if (typewriterTimerRef.current) {
+      clearTimeout(typewriterTimerRef.current)
+      typewriterTimerRef.current = null
+    }
+    setPendingAutoFetch(false)
+
     abortRef.current?.abort()
     abortRef.current = null
     resetFetchProgress()

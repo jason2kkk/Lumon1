@@ -1,4 +1,4 @@
-import { useState, useCallback, Component, type ReactNode, type ErrorInfo } from 'react'
+import { useState, useEffect, useCallback, Component, type ReactNode, type ErrorInfo } from 'react'
 import { AnimatePresence, motion } from 'framer-motion'
 import NavSidebar from './components/NavSidebar'
 import FetchView from './components/FetchView'
@@ -48,8 +48,27 @@ const viewTransition = {
 
 export default function App() {
   const activeView = useAppStore((s) => s.activeView)
+  const setActiveView = useAppStore((s) => s.setActiveView)
+  const setPrefillFetchQuery = useAppStore((s) => s.setPrefillFetchQuery)
+  const setAutoStartFetch = useAppStore((s) => s.setAutoStartFetch)
   const [detailWidth, setDetailWidth] = useState(DEFAULT_DETAIL)
   const [mobileDebateTab, setMobileDebateTab] = useState<'chat' | 'detail'>('chat')
+
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search)
+    const q = params.get('q')
+    if (q) {
+      const trimmed = q.slice(0, 500).trim()
+      if (trimmed) {
+        setActiveView('fetch')
+        setPrefillFetchQuery(trimmed)
+        if (params.get('autostart') === '1') {
+          setAutoStartFetch(true)
+        }
+        window.history.replaceState({}, '', window.location.pathname)
+      }
+    }
+  }, [])
 
   const handleResize = useCallback((delta: number) => {
     setDetailWidth((w) => Math.min(MAX_DETAIL, Math.max(MIN_DETAIL, w - delta)))
