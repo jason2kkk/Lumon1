@@ -800,6 +800,7 @@ export interface OnlineStats {
   online: number
   mining: number
   needs: number
+  app_version?: string
 }
 
 export function getOnlineStats() {

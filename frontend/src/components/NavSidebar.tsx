@@ -24,9 +24,14 @@ export default function NavSidebar() {
   const [stats, setStats] = useState<OnlineStats | null>(null)
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null)
 
+  const checkAppVersion = useAppStore((s) => s.checkAppVersion)
+
   const fetchStats = useCallback(() => {
-    getOnlineStats().then(setStats).catch(() => {})
-  }, [])
+    getOnlineStats().then((data) => {
+      setStats(data)
+      if (data.app_version) checkAppVersion(data.app_version)
+    }).catch(() => {})
+  }, [checkAppVersion])
 
   useEffect(() => {
     fetchStats()

@@ -3,7 +3,7 @@
  * 缓存以 need_title 为 key，刷新自动加载 needs + 缓存
  * 性别匹配头像，卡片固定高度可展开（带动画），生成时头像轮播
  */
-import React, { useState, useEffect, useRef, useCallback } from 'react'
+import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
 import { ArrowLeft, MessageSquare, TrendingUp, AlertCircle, ExternalLink, ChevronDown } from 'lucide-react'
 import { useAppStore } from '../stores/app'
@@ -95,31 +95,28 @@ function scoreAvatarMatch(avatar: AvatarMeta, hint: string): number {
   return score
 }
 
-const _usedAvatars = new Map<string, Set<string>>()
+function assignAvatarsForPersonas(personas: Persona[], needTitle: string): string[] {
+  const used = new Set<string>()
+  return personas.map((p, index) => {
+    const pool = p.gender === 'female' ? FEMALE_AVATARS : p.gender === 'male' ? MALE_AVATARS : AVATAR_DB
+    const available = pool.filter(a => !used.has(a.src))
+    const candidates = available.length > 0 ? available : pool
 
-function getAvatarForPersona(index: number, needTitle: string, gender?: string, avatarHint?: string): string {
-  const key = needTitle.trim().toLowerCase()
-  if (!_usedAvatars.has(key)) _usedAvatars.set(key, new Set())
-  const used = _usedAvatars.get(key)!
-
-  const pool = gender === 'female' ? FEMALE_AVATARS : gender === 'male' ? MALE_AVATARS : AVATAR_DB
-  const available = pool.filter(a => !used.has(a.src))
-  const candidates = available.length > 0 ? available : pool
-
-  if (avatarHint) {
-    const scored = candidates.map(a => ({ a, score: scoreAvatarMatch(a, avatarHint) }))
-    scored.sort((a, b) => b.score - a.score)
-    if (scored[0].score > 0) {
-      used.add(scored[0].a.src)
-      return scored[0].a.src
+    if (p.avatar_hint) {
+      const scored = candidates.map(a => ({ a, score: scoreAvatarMatch(a, p.avatar_hint!) }))
+      scored.sort((a, b) => b.score - a.score)
+      if (scored[0].score > 0) {
+        used.add(scored[0].a.src)
+        return scored[0].a.src
+      }
     }
-  }
 
-  let hash = 0
-  for (let i = 0; i < needTitle.length; i++) hash = ((hash << 5) - hash + needTitle.charCodeAt(i)) | 0
-  const pick = candidates[((Math.abs(hash) + index) % candidates.length)]
-  used.add(pick.src)
-  return pick.src
+    let hash = 0
+    for (let i = 0; i < needTitle.length; i++) hash = ((hash << 5) - hash + needTitle.charCodeAt(i)) | 0
+    const pick = candidates[((Math.abs(hash) + index) % candidates.length)]
+    used.add(pick.src)
+    return pick.src
+  })
 }
 
 const CACHE_KEY = 'lumon_persona_cache_v2'
@@ -203,8 +200,9 @@ function AvatarCycler() {
 
 const GENDER_LABEL: Record<string, string> = { male: '男', female: '女' }
 
-function PersonaCard({ persona, index, needTitle }: { persona: Persona; index: number; needTitle: string }) {
-  const [expanded, setExpanded] = useState(false)
+function PersonaCard({ persona, index, avatarSrc, expanded, onToggle }: {
+  persona: Persona; index: number; avatarSrc: string; expanded: boolean; onToggle: () => void
+}) {
   const p = persona
   const firstName = extractFirstName(p.name)
 
@@ -216,7 +214,7 @@ function PersonaCard({ persona, index, needTitle }: { persona: Persona; index: n
       className="bg-[#fafaf9] rounded-2xl border border-border/40 p-5 flex flex-col"
     >
       <div className="flex gap-3 mb-3">
-        <img src={getAvatarForPersona(index, needTitle, p.gender, p.avatar_hint)} alt="" className="w-11 h-11 rounded-full object-cover shrink-0" />
+        <img src={avatarSrc} alt="" className="w-11 h-11 rounded-full object-cover shrink-0" />
         <div className="min-w-0 flex-1">
           <h3 className="text-[13px] font-semibold leading-snug mb-1.5">{firstName}</h3>
           <div className="flex flex-wrap gap-1">
@@ -288,7 +286,7 @@ function PersonaCard({ persona, index, needTitle }: { persona: Persona; index: n
       </motion.div>
 
       <button
-        onClick={() => setExpanded(!expanded)}
+        onClick={onToggle}
         className="mt-2 flex items-center justify-center gap-1 text-[10px] text-muted hover:text-accent transition-colors py-1"
       >
         <motion.div animate={{ rotate: expanded ? 180 : 0 }} transition={{ duration: 0.25 }}>
@@ -317,8 +315,15 @@ export default function PersonaView() {
   const abortRef = useRef<AbortController | null>(null)
   const smoothRef = useRef({ real: 0, display: 0, lastUpdate: Date.now() })
 
+  const [expandedCardIdx, setExpandedCardIdx] = useState<number | null>(null)
+
   const selectedNeed = personaNeedIndex !== null ? needs[personaNeedIndex] : null
   const selectedTitle = selectedNeed?.need_title ?? ''
+
+  const avatarMap = useMemo(
+    () => personas.length > 0 ? assignAvatarsForPersonas(personas, selectedTitle) : [],
+    [personas, selectedTitle]
+  )
 
   // Load needs from backend on mount if empty (handles page refresh)
   useEffect(() => {
@@ -388,6 +393,7 @@ export default function PersonaView() {
     setProgressMsg('准备中...')
     setError('')
     setPersonas([])
+    setExpandedCardIdx(null)
 
     abortRef.current = new AbortController()
     const title = needs[needIdx]?.need_title ?? ''
@@ -415,6 +421,9 @@ export default function PersonaView() {
 
   const handleSelectNeed = (idx: number) => {
     setPersonaNeedIndex(idx)
+    setExpandedCardIdx(null)
+    setStoryIdx(0)
+    setActiveTab('cards')
     const title = needs[idx]?.need_title ?? ''
     const cached = loadCachedPersonas(title)
     if (cached && cached.length > 0) {
@@ -430,6 +439,9 @@ export default function PersonaView() {
     setPersonas([])
     setGenerating(false)
     setError('')
+    setExpandedCardIdx(null)
+    setStoryIdx(0)
+    setActiveTab('cards')
   }
 
   // ===== 需求选择列表 =====
@@ -559,9 +571,16 @@ export default function PersonaView() {
 
           {/* ===== Tab 1: 画像卡片 ===== */}
           {!generating && !error && personas.length > 0 && activeTab === 'cards' && (
-            <div className="grid grid-cols-2 max-md:grid-cols-1 gap-4">
+            <div className="grid grid-cols-2 max-md:grid-cols-1 gap-4 items-start">
               {personas.map((p, pi) => (
-                <PersonaCard key={pi} persona={p} index={pi} needTitle={selectedTitle} />
+                <PersonaCard
+                  key={pi}
+                  persona={p}
+                  index={pi}
+                  avatarSrc={avatarMap[pi] ?? ''}
+                  expanded={expandedCardIdx === pi}
+                  onToggle={() => setExpandedCardIdx(prev => prev === pi ? null : pi)}
+                />
               ))}
             </div>
           )}
@@ -578,7 +597,7 @@ export default function PersonaView() {
                         : 'text-muted hover:text-text bg-bg ring-1 ring-border/40'
                     }`}
                   >
-                    <img src={getAvatarForPersona(pi, selectedTitle, p.gender, p.avatar_hint)} alt=""
+                    <img src={avatarMap[pi] ?? ''} alt=""
                       className={`w-5 h-5 rounded-full object-cover shrink-0 ${storyIdx === pi ? 'ring-1 ring-white/40' : ''}`} />
                     {extractFirstName(p.name)}
                   </button>
@@ -591,7 +610,7 @@ export default function PersonaView() {
                 return (
                   <div className="bg-[#fafaf9] rounded-2xl border border-border/40 p-6">
                     <div className="flex items-center gap-3 mb-5">
-                      <img src={getAvatarForPersona(storyIdx, selectedTitle, p.gender, p.avatar_hint)} alt="" className="w-12 h-12 rounded-full object-cover shrink-0" />
+                      <img src={avatarMap[storyIdx] ?? ''} alt="" className="w-12 h-12 rounded-full object-cover shrink-0" />
                       <div>
                         <h3 className="text-sm font-semibold">{extractFirstName(p.name)}</h3>
                         <p className="text-[11px] text-muted">{p.bio || p.tagline}</p>
@@ -654,7 +673,7 @@ export default function PersonaView() {
                       {personas.map((p, pi) => (
                         <th key={pi} className="text-left py-2 px-2 font-semibold">
                           <div className="flex items-center gap-2">
-                            <img src={getAvatarForPersona(pi, selectedTitle, p.gender, p.avatar_hint)} alt="" className="w-6 h-6 rounded-full object-cover shrink-0" />
+                            <img src={avatarMap[pi] ?? ''} alt="" className="w-6 h-6 rounded-full object-cover shrink-0" />
                             <span className="truncate">{extractFirstName(p.name)}</span>
                           </div>
                         </th>

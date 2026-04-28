@@ -4582,7 +4582,7 @@ def online_stats():
                 online += 1
                 if ctx.fetch_job.get("active"):
                     mining += 1
-    return {"online": online, "mining": mining, "needs": _read_global_needs_count()}
+    return {"online": online, "mining": mining, "needs": _read_global_needs_count(), "app_version": "1.1.0"}
 
 
 # ============================================================
@@ -4928,7 +4928,7 @@ def generate_personas(req: PersonaRequest, request: Request):
 - 不同画像之间要有明显差异，覆盖不同的用户类型
 
 要求：
-1. name：英文名 + 年龄 + 职业（如 "Alex, 28, 前端工程师"），名字要符合性别
+1. name：必须用英文名（Western name），禁止使用中文名！格式为 "英文名, 年龄, 职业"（如 "Alex, 28, 前端工程师"、"Emily, 34, 产品经理"），名字要符合性别和种族特征
 2. gender：明确指定 "male" 或 "female"，画像群体中男女应合理分布
 3. avatar_hint：用英文描述此人的外貌特征，方便匹配头像（如 "young white male, brown hair, glasses" 或 "middle-aged asian female, professional"）
 4. tagline：一句话中文人设标签，要有画面感（如 "被照片淹没的记录强迫症患者"）
@@ -4979,7 +4979,7 @@ def generate_personas(req: PersonaRequest, request: Request):
             _update_progress(50, "正在深度建模用户画像，预计 30-40 秒...")
 
             step2_result = call_llm([
-                {"role": "system", "content": "你是用户研究专家，擅长建模鲜活的用户画像。基于真实数据，不要编造。严格输出 JSON 数组。goals、frustrations、tagline、bio、day_in_life、demographics 等所有字段必须用中文，绝对不能出现英文！唯一例外：quotes 中的 text 保留英文原文并附 text_zh 中文翻译，avatar_hint 用英文。day_in_life 中与需求相关的关键短语请用 **双星号** 加粗。"},
+                {"role": "system", "content": "你是用户研究专家，擅长建模鲜活的用户画像。基于真实数据，不要编造。严格输出 JSON 数组。name 字段必须使用英文名（如 Alex、Emily、Marcus），严禁中文名！goals、frustrations、tagline、bio、day_in_life、demographics 等所有字段必须用中文，绝对不能出现英文！唯一例外：quotes 中的 text 保留英文原文并附 text_zh 中文翻译，avatar_hint 用英文。day_in_life 中与需求相关的关键短语请用 **双星号** 加粗。"},
                 {"role": "user", "content": step2_prompt},
             ], max_tokens=12000)
 

@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
+import { useAppStore } from '../stores/app'
 
 const CURRENT_VERSION = '1.1.0'
 const STORAGE_KEY = 'lumon_whats_new_seen'
@@ -15,20 +16,38 @@ const SLIDES: UpdateSlide[] = [
 ]
 
 export default function WhatsNewModal() {
-  const [visible, setVisible] = useState(false)
+  const storeVisible = useAppStore((s) => s.whatsNewVisible)
+  const setStoreVisible = useAppStore((s) => s.setWhatsNewVisible)
+
+  const [localVisible, setLocalVisible] = useState(false)
   const [slide, setSlide] = useState(0)
 
   useEffect(() => {
     try {
       const seen = localStorage.getItem(STORAGE_KEY)
-      if (seen !== CURRENT_VERSION) setVisible(true)
+      if (seen !== CURRENT_VERSION) {
+        setLocalVisible(true)
+        setStoreVisible(true)
+      }
     } catch {
-      setVisible(true)
+      setLocalVisible(true)
+      setStoreVisible(true)
     }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
+  useEffect(() => {
+    if (storeVisible && !localVisible) {
+      setSlide(0)
+      setLocalVisible(true)
+    }
+  }, [storeVisible, localVisible])
+
+  const visible = localVisible
+
   const handleDismiss = () => {
-    setVisible(false)
+    setLocalVisible(false)
+    setStoreVisible(false)
     try { localStorage.setItem(STORAGE_KEY, CURRENT_VERSION) } catch { /* */ }
   }
 

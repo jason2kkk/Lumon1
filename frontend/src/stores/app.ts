@@ -111,6 +111,10 @@ interface AppState {
 
   personaNeedIndex: number | null
   setPersonaNeedIndex: (idx: number | null) => void
+
+  whatsNewVisible: boolean
+  setWhatsNewVisible: (v: boolean) => void
+  checkAppVersion: (serverVersion: string) => void
 }
 
 let messageCounter = 0
@@ -312,4 +316,18 @@ export const useAppStore = create<AppState>((set) => ({
 
   personaNeedIndex: null,
   setPersonaNeedIndex: (idx) => set({ personaNeedIndex: idx }),
+
+  whatsNewVisible: false,
+  setWhatsNewVisible: (v) => set({ whatsNewVisible: v }),
+  checkAppVersion: (serverVersion) => {
+    if (!serverVersion) return
+    try {
+      const seen = localStorage.getItem('lumon_whats_new_seen')
+      if (seen !== serverVersion) {
+        set({ whatsNewVisible: true })
+      }
+    } catch {
+      set({ whatsNewVisible: true })
+    }
+  },
 }))
