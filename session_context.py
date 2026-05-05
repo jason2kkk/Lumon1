@@ -25,7 +25,7 @@ _sessions: dict[str, "SessionContext"] = {}
 SESSION_EXPIRE_SECONDS = 90 * 24 * 3600  # 90 天无活跃才清理磁盘（保护报告和需求）
 MEMORY_EXPIRE_SECONDS = 30 * 60          # 30 分钟无请求则释放内存（磁盘数据保留）
 
-_LLM_TIMEOUT = 120
+_LLM_TIMEOUT = 180
 
 DEFAULT_ROLE_NAMES = {"director": "导演", "analyst": "产品经理", "critic": "杠精", "investor": "投资人"}
 
@@ -290,9 +290,23 @@ class SessionContext:
         kwargs: dict = {"model": cfg["model"], "messages": messages, "temperature": 0.7}
         if max_tokens is not None:
             kwargs["max_tokens"] = max_tokens
-        response = client.chat.completions.create(**kwargs)
-        self.record_usage("claude", response.usage)
-        return response.choices[0].message.content
+        for attempt in range(3):
+            try:
+                response = client.chat.completions.create(**kwargs)
+                self.record_usage("claude", response.usage)
+                return response.choices[0].message.content
+            except Exception as e:
+                err_msg = str(e).lower()
+                print(f"[Claude] call attempt {attempt+1}/3 failed: {e}")
+                retryable = ("connection" in err_msg or "timeout" in err_msg or "timed out" in err_msg
+                             or "500" in err_msg or "server" in err_msg
+                             or "one_api" in err_msg or ("401" in err_msg and "令牌" in err_msg))
+                if attempt < 2 and retryable:
+                    import time as _t
+                    _t.sleep(2 ** attempt)
+                    continue
+                raise
+        return ""
 
     def call_gpt(self, messages: list[dict], max_tokens: int | None = None) -> str:
         client = self.get_gpt_client()
@@ -300,9 +314,26 @@ class SessionContext:
         kwargs: dict = {"model": cfg["model"], "messages": messages, "temperature": 0.7}
         if max_tokens is not None:
             kwargs["max_tokens"] = max_tokens
-        response = client.chat.completions.create(**kwargs)
-        self.record_usage("gpt", response.usage)
-        return response.choices[0].message.content
+        _max_attempts = 5
+        for attempt in range(_max_attempts):
+            try:
+                response = client.chat.completions.create(**kwargs)
+                self.record_usage("gpt", response.usage)
+                return response.choices[0].message.content
+            except Exception as e:
+                err_msg = str(e).lower()
+                print(f"[GPT] call attempt {attempt+1}/{_max_attempts} failed: {e}")
+                retryable = ("connection" in err_msg or "timeout" in err_msg or "timed out" in err_msg
+                             or "500" in err_msg or "server" in err_msg or "codex" in err_msg
+                             or "one_api" in err_msg or ("401" in err_msg and "令牌" in err_msg)
+                             or "rate" in err_msg or "429" in err_msg)
+                if attempt < _max_attempts - 1 and retryable:
+                    import time as _t
+                    _delay = min(3 * (2 ** attempt), 30)
+                    _t.sleep(_delay)
+                    continue
+                raise
+        return ""
 
     def check_llm_available(self) -> tuple[bool, str]:
         """轻量级检测当前配置的 LLM 是否可用。返回 (ok, error_message)。"""
@@ -373,6 +404,10 @@ class SessionContext:
             cfg = self.get_config("GPT")
             if cfg["api_key"]:
                 return self.call_gpt(messages, max_tokens)
+            raise RuntimeError("通用模型设为 GPT，但 GPT API Key 未配置，请前往「设置」配置")
+        cfg_c = self.get_config("CLAUDE")
+        if not cfg_c["api_key"]:
+            raise RuntimeError("通用模型设为 Claude，但 Claude API Key 未配置，请前往「设置」配置")
         return self.call_claude(messages, max_tokens)
 
     def call_llm_stream(self, messages: list[dict], max_tokens: int | None = None):
@@ -382,12 +417,16 @@ class SessionContext:
             if cfg["api_key"]:
                 yield from self.call_gpt_stream(messages, max_tokens)
                 return
+            raise RuntimeError("通用模型设为 GPT，但 GPT API Key 未配置，请前往「设置」配置")
+        cfg_c = self.get_config("CLAUDE")
+        if not cfg_c["api_key"]:
+            raise RuntimeError("通用模型设为 Claude，但 Claude API Key 未配置，请前往「设置」配置")
         yield from self.call_claude_stream(messages, max_tokens)
 
     def call_claude_stream(self, messages: list[dict], max_tokens: int | None = None):
         client = self.get_claude_client()
         cfg = self.get_config("CLAUDE")
-        for attempt in range(2):
+        for attempt in range(3):
             had_content = False
             try:
                 kwargs: dict = {
@@ -405,12 +444,16 @@ class SessionContext:
                         yield chunk.choices[0].delta.content
                 return
             except Exception as e:
-                print(f"[Claude] stream attempt {attempt+1}/2 failed (had_content={had_content}): {e}")
+                err_msg = str(e).lower()
+                print(f"[Claude] stream attempt {attempt+1}/3 failed (had_content={had_content}): {e}")
                 if had_content:
                     return
-                if attempt < 1:
+                retryable = ("connection" in err_msg or "timeout" in err_msg or "timed out" in err_msg
+                             or "500" in err_msg or "server" in err_msg or "stream" in err_msg
+                             or "one_api" in err_msg or ("401" in err_msg and "令牌" in err_msg))
+                if attempt < 2 and retryable:
                     import time as _t
-                    _t.sleep(1)
+                    _t.sleep(2 ** attempt)
                     continue
                 raise
 
@@ -418,7 +461,8 @@ class SessionContext:
         client = self.get_gpt_client()
         cfg = self.get_config("GPT")
         model = cfg["model"]
-        for attempt in range(3):
+        _max_attempts = 5
+        for attempt in range(_max_attempts):
             had_content = False
             try:
                 kwargs: dict = {
@@ -438,29 +482,49 @@ class SessionContext:
                 return
             except Exception as e:
                 err_msg = str(e).lower()
-                print(f"[GPT] stream attempt {attempt+1}/3 failed (had_content={had_content}): {e}")
+                print(f"[GPT] stream attempt {attempt+1}/{_max_attempts} failed (had_content={had_content}): {e}")
                 if had_content:
                     return
-                if attempt < 2 and ("stream" in err_msg or "codex" in err_msg or "500" in err_msg or "server" in err_msg):
+                retryable = ("connection" in err_msg or "timeout" in err_msg or "timed out" in err_msg
+                             or "stream" in err_msg or "codex" in err_msg or "500" in err_msg
+                             or "server" in err_msg or "one_api" in err_msg
+                             or ("401" in err_msg and "令牌" in err_msg)
+                             or "rate" in err_msg or "429" in err_msg)
+                if attempt < _max_attempts - 1 and retryable:
                     import time as _t
-                    _t.sleep(1)
+                    _delay = min(3 * (2 ** attempt), 30)
+                    _t.sleep(_delay)
                     continue
                 raise
 
     def call_for_role(self, role: str, messages: list[dict], max_tokens: int | None = None) -> str:
-        provider = self._role_model_map.get(role, "claude")
+        provider = self._role_model_map.get(role, "gpt")
         if provider == "gpt":
             cfg_g = self.get_config("GPT")
-            if cfg_g["api_key"]:
-                return self.call_gpt(messages, max_tokens)
+            if not cfg_g["api_key"]:
+                raise RuntimeError("角色使用了 GPT，但 GPT API Key 未配置，请前往「设置」配置")
+            return self.call_gpt(messages, max_tokens)
+        cfg_g_fallback = self.get_config("GPT")
+        if cfg_g_fallback["api_key"]:
+            return self.call_gpt(messages, max_tokens)
+        cfg_c = self.get_config("CLAUDE")
+        if not cfg_c["api_key"]:
+            raise RuntimeError("角色使用了 Claude，但 Claude API Key 未配置，请前往「设置」配置")
         return self.call_claude(messages, max_tokens)
 
     def call_for_role_stream(self, role: str, messages: list[dict], max_tokens: int | None = None):
-        provider = self._role_model_map.get(role, "claude")
+        provider = self._role_model_map.get(role, "gpt")
         if provider == "gpt":
             cfg_g = self.get_config("GPT")
-            if cfg_g["api_key"]:
-                return self.call_gpt_stream(messages, max_tokens)
+            if not cfg_g["api_key"]:
+                raise RuntimeError("角色使用了 GPT，但 GPT API Key 未配置，请前往「设置」配置")
+            return self.call_gpt_stream(messages, max_tokens)
+        cfg_g_fallback = self.get_config("GPT")
+        if cfg_g_fallback["api_key"]:
+            return self.call_gpt_stream(messages, max_tokens)
+        cfg_c = self.get_config("CLAUDE")
+        if not cfg_c["api_key"]:
+            raise RuntimeError("角色使用了 Claude，但 Claude API Key 未配置，请前往「设置」配置")
         return self.call_claude_stream(messages, max_tokens)
 
     # ── Token 统计 ──

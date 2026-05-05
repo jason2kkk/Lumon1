@@ -13,6 +13,7 @@ import {
   getRedditCategories, getEngineStatus,
   getFetchStatus, stopFetch, streamGenerateReport,
   getSensorTowerStatus, getReportGenStatus, streamReportGenResume,
+  listReports,
 } from '../api/client'
 import type { FetchParams, RedditCategory } from '../api/client'
 import type { Need, FemwcDimension } from '../types'
@@ -149,6 +150,8 @@ export default function FetchView() {
   const [stConnected, setStConnected] = useState<boolean | null>(null)
   const reportGenAbort = useRef<AbortController | null>(null)
   const demoModeRef = useRef(false)
+  const [reportMap, setReportMap] = useState<Map<string, string>>(new Map())
+  const [personaCacheKeys, setPersonaCacheKeys] = useState<Set<string>>(new Set())
 
   const _reportEasterEggs = [
     '正在努力输出报告，请稍等',
@@ -258,12 +261,30 @@ export default function FetchView() {
       .catch(() => setStConnected(false))
   }
 
+  const refreshBadges = useCallback(() => {
+    listReports().then(({ reports }) => {
+      const map = new Map<string, string>()
+      for (const r of reports) map.set(r.title.trim().toLowerCase(), r.filename)
+      setReportMap(map)
+    }).catch(() => {})
+    try {
+      const raw = localStorage.getItem('lumon_persona_cache_v2')
+      if (raw) {
+        const cache = JSON.parse(raw) as Record<string, unknown>
+        setPersonaCacheKeys(new Set(Object.keys(cache)))
+      }
+    } catch { /* ignore */ }
+  }, [])
+
   const loadRoleNames = useAppStore((s) => s.loadRoleNames)
+
+  useEffect(() => { refreshBadges() }, [needs, refreshBadges])
 
   useEffect(() => {
     loadFetchHistory()
     loadDataSources()
     loadRoleNames()
+    refreshBadges()
     getRedditCategories()
       .then((r) => setRedditCategories(r.categories))
       .catch(() => {})
@@ -683,6 +704,7 @@ export default function FetchView() {
       onDone: (data) => {
         setReportGenProgress(100)
         setReportGenMsg('报告生成完成！')
+        refreshBadges()
         setTimeout(() => {
           setReportGenIdx(null)
           if (data?.filename) {
@@ -702,6 +724,9 @@ export default function FetchView() {
   }
 
   const isDebatingNeed = (idx: number) => selectedNeedIndex === idx && hasActiveDebate
+
+  const needReportFile = (need: Need) => reportMap.get(need.need_title.trim().toLowerCase()) || null
+  const needHasPersona = (need: Need) => personaCacheKeys.has(need.need_title.trim().toLowerCase())
 
   return (
     <div className="h-full flex flex-col">
@@ -1305,13 +1330,22 @@ export default function FetchView() {
 
                           <div className="flex items-center gap-1.5" onClick={(e) => e.stopPropagation()}>
                             {reportGenIdx !== i ? (
-                              <button
-                                onClick={() => handleGenerateReport(i)}
-                                disabled={reportGenIdx !== null}
-                                className="flex items-center gap-1 text-[11px] font-medium text-white bg-accent h-7 px-3 rounded-lg hover:opacity-90 transition-opacity disabled:opacity-50"
-                              >
-                                <img src="/book_2_ai_line.png" alt="" className="w-3.5 h-3.5 opacity-90 brightness-0 invert" /> 生成报告
-                              </button>
+                              needReportFile(need) ? (
+                                <button
+                                  onClick={() => { useAppStore.getState().setPendingReportFile(needReportFile(need)!); setActiveView('reports') }}
+                                  className="flex items-center gap-1 text-[11px] font-medium text-accent border border-accent/30 h-7 px-3 rounded-lg hover:bg-accent/5 transition-colors"
+                                >
+                                  <img src="/book_2_ai_line.png" alt="" className="w-3.5 h-3.5 opacity-70" /> 查看报告
+                                </button>
+                              ) : (
+                                <button
+                                  onClick={() => handleGenerateReport(i)}
+                                  disabled={reportGenIdx !== null}
+                                  className="flex items-center gap-1 text-[11px] font-medium text-white bg-accent h-7 px-3 rounded-lg hover:opacity-90 transition-opacity disabled:opacity-50"
+                                >
+                                  <img src="/book_2_ai_line.png" alt="" className="w-3.5 h-3.5 opacity-90 brightness-0 invert" /> 生成报告
+                                </button>
+                              )
                             ) : (
                               <button
                                 onClick={() => { reportGenAbort.current?.abort(); setReportGenIdx(null) }}
@@ -1327,13 +1361,23 @@ export default function FetchView() {
                             >
                               {debating ? '继续讨论' : '讨论'}
                             </InteractiveHoverButton>
-                            <InteractiveHoverButton
-                              onClick={() => { useAppStore.getState().setPersonaNeedIndex(i); setActiveView('personas') }}
-                              icon={<img src="/group_2_line.png" alt="" className="w-3.5 h-3.5 opacity-90" />}
-                              hoverIcon={<img src="/group_2_line.png" alt="" className="w-3.5 h-3.5 brightness-0 invert" />}
-                            >
-                              画像
-                            </InteractiveHoverButton>
+                            {needHasPersona(need) ? (
+                              <InteractiveHoverButton
+                                onClick={() => { useAppStore.getState().setPersonaNeedIndex(i); setActiveView('personas') }}
+                                icon={<img src="/group_2_line.png" alt="" className="w-3.5 h-3.5 opacity-90" />}
+                                hoverIcon={<img src="/group_2_line.png" alt="" className="w-3.5 h-3.5 brightness-0 invert" />}
+                              >
+                                查看画像
+                              </InteractiveHoverButton>
+                            ) : (
+                              <InteractiveHoverButton
+                                onClick={() => { useAppStore.getState().setPersonaNeedIndex(i); setActiveView('personas') }}
+                                icon={<img src="/group_2_line.png" alt="" className="w-3.5 h-3.5 opacity-90" />}
+                                hoverIcon={<img src="/group_2_line.png" alt="" className="w-3.5 h-3.5 brightness-0 invert" />}
+                              >
+                                画像
+                              </InteractiveHoverButton>
+                            )}
                             <div className="flex-1" />
                             <ChevronDown size={13} className={`text-muted transition-transform duration-200 ${isExpanded ? 'rotate-180' : ''}`} />
                           </div>

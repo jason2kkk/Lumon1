@@ -13,7 +13,7 @@ debate.py — 话题制讨论引擎
 import json
 import re
 from pathlib import Path
-from llm_client import call_claude, call_for_role, estimate_tokens
+from llm_client import call_for_role, estimate_tokens
 
 from prompts import (
     DIRECTOR_SYSTEM_PROMPT,

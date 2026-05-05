@@ -129,10 +129,10 @@ _DEFAULT_CONFIG = {
 
 # role → model provider mapping: "claude" or "gpt"
 _role_model_map: dict[str, str] = {
-    "director": "claude",
-    "analyst": "claude",
-    "critic": "claude",
-    "investor": "claude",
+    "director": "gpt",
+    "analyst": "gpt",
+    "critic": "gpt",
+    "investor": "gpt",
 }
 
 
@@ -175,7 +175,7 @@ _load_role_model_config()
 
 
 # 全局模型偏好：控制讨论角色和 WebSearch 以外的所有 LLM 调用
-_general_model: str = "claude"
+_general_model: str = "gpt"
 
 
 def _load_general_model():
@@ -233,7 +233,7 @@ def _config_hash(cfg: dict) -> str:
     return f"{cfg['base_url']}|{cfg['api_key'][:8] if cfg['api_key'] else ''}|{cfg['model']}"
 
 
-_LLM_TIMEOUT = 120
+_LLM_TIMEOUT = 180
 
 def _get_claude_client() -> OpenAI:
     global _claude_client, _claude_config_hash
@@ -372,6 +372,10 @@ def call_llm(messages: list[dict], max_tokens: int | None = None) -> str:
         cfg = _get_config("GPT")
         if cfg["api_key"]:
             return call_gpt(messages, max_tokens)
+        raise RuntimeError("通用模型设为 GPT，但 GPT API Key 未配置，请前往「设置」配置")
+    cfg_c = _get_config("CLAUDE")
+    if not cfg_c["api_key"]:
+        raise RuntimeError("通用模型设为 Claude，但 Claude API Key 未配置，请前往「设置」配置")
     return call_claude(messages, max_tokens)
 
 
@@ -386,6 +390,10 @@ def call_llm_stream(messages: list[dict], max_tokens: int | None = None):
         if cfg["api_key"]:
             yield from call_gpt_stream(messages, max_tokens)
             return
+        raise RuntimeError("通用模型设为 GPT，但 GPT API Key 未配置，请前往「设置」配置")
+    cfg_c = _get_config("CLAUDE")
+    if not cfg_c["api_key"]:
+        raise RuntimeError("通用模型设为 Claude，但 Claude API Key 未配置，请前往「设置」配置")
     yield from call_claude_stream(messages, max_tokens)
 
 
@@ -397,7 +405,7 @@ def call_claude_stream(messages: list[dict], max_tokens: int | None = None):
     client = _get_claude_client()
     cfg = _get_config("CLAUDE")
 
-    for attempt in range(2):
+    for attempt in range(3):
         had_content = False
         try:
             kwargs: dict = {
@@ -418,13 +426,17 @@ def call_claude_stream(messages: list[dict], max_tokens: int | None = None):
                     yield chunk.choices[0].delta.content
             return
         except Exception as e:
-            print(f"[Claude] stream attempt {attempt+1}/2 failed (had_content={had_content}): {e}")
+            err_msg = str(e).lower()
+            print(f"[Claude] stream attempt {attempt+1}/3 failed (had_content={had_content}): {e}")
             if had_content:
                 print("[Claude] Already yielded content, cannot retry without duplicating")
                 return
-            if attempt < 1:
+            retryable = ("connection" in err_msg or "timeout" in err_msg or "timed out" in err_msg
+                         or "500" in err_msg or "server" in err_msg or "stream" in err_msg
+                         or "one_api" in err_msg or ("401" in err_msg and "令牌" in err_msg))
+            if attempt < 2 and retryable:
                 import time
-                time.sleep(1)
+                time.sleep(2 ** attempt)
                 continue
             raise
 
@@ -438,7 +450,8 @@ def call_gpt_stream(messages: list[dict], max_tokens: int | None = None):
     cfg = _get_config("GPT")
     model = cfg["model"]
 
-    for attempt in range(3):
+    _max_attempts = 5
+    for attempt in range(_max_attempts):
         had_content = False
         try:
             kwargs: dict = {
@@ -462,13 +475,19 @@ def call_gpt_stream(messages: list[dict], max_tokens: int | None = None):
             return
         except Exception as e:
             err_msg = str(e).lower()
-            print(f"[GPT] stream attempt {attempt+1}/3 failed (had_content={had_content}): {e}")
+            print(f"[GPT] stream attempt {attempt+1}/{_max_attempts} failed (had_content={had_content}): {e}")
             if had_content:
                 print("[GPT] Already yielded content, cannot retry without duplicating")
                 return
-            if attempt < 2 and ("stream" in err_msg or "codex" in err_msg or "500" in err_msg or "server" in err_msg):
+            retryable = ("connection" in err_msg or "timeout" in err_msg or "timed out" in err_msg
+                         or "stream" in err_msg or "codex" in err_msg or "500" in err_msg
+                         or "server" in err_msg or "one_api" in err_msg
+                         or ("401" in err_msg and "令牌" in err_msg)
+                         or "rate" in err_msg or "429" in err_msg)
+            if attempt < _max_attempts - 1 and retryable:
                 import time
-                time.sleep(1)
+                _delay = min(3 * (2 ** attempt), 30)
+                time.sleep(_delay)
                 continue
             raise
 
@@ -499,11 +518,20 @@ def call_for_role(role: str, messages: list[dict], max_tokens: int | None = None
     ctx = get_thread_session()
     if ctx:
         return ctx.call_for_role(role, messages, max_tokens)
-    provider = _role_model_map.get(role, "claude")
+    print(f"[WARN] call_for_role({role}): no thread session! global _role_model_map={_role_model_map}")
+    provider = _role_model_map.get(role, "gpt")
     if provider == "gpt":
         cfg_g = _get_config("GPT")
-        if cfg_g["api_key"]:
-            return call_gpt(messages, max_tokens)
+        if not cfg_g["api_key"]:
+            raise RuntimeError("角色使用了 GPT，但 GPT API Key 未配置，请前往「设置」配置")
+        return call_gpt(messages, max_tokens)
+    cfg_g_fallback = _get_config("GPT")
+    if cfg_g_fallback["api_key"]:
+        print(f"[WARN] role={role} mapped to claude but Claude unavailable, using GPT")
+        return call_gpt(messages, max_tokens)
+    cfg_c = _get_config("CLAUDE")
+    if not cfg_c["api_key"]:
+        raise RuntimeError("角色使用了 Claude，但 Claude API Key 未配置，请前往「设置」配置")
     return call_claude(messages, max_tokens)
 
 
@@ -512,11 +540,20 @@ def call_for_role_stream(role: str, messages: list[dict], max_tokens: int | None
     ctx = get_thread_session()
     if ctx:
         return ctx.call_for_role_stream(role, messages, max_tokens)
-    provider = _role_model_map.get(role, "claude")
+    print(f"[WARN] call_for_role_stream({role}): no thread session! global _role_model_map={_role_model_map}")
+    provider = _role_model_map.get(role, "gpt")
     if provider == "gpt":
         cfg_g = _get_config("GPT")
-        if cfg_g["api_key"]:
-            return call_gpt_stream(messages, max_tokens)
+        if not cfg_g["api_key"]:
+            raise RuntimeError("角色使用了 GPT，但 GPT API Key 未配置，请前往「设置」配置")
+        return call_gpt_stream(messages, max_tokens)
+    cfg_g_fallback = _get_config("GPT")
+    if cfg_g_fallback["api_key"]:
+        print(f"[WARN] role={role} mapped to claude but Claude unavailable, using GPT")
+        return call_gpt_stream(messages, max_tokens)
+    cfg_c = _get_config("CLAUDE")
+    if not cfg_c["api_key"]:
+        raise RuntimeError("角色使用了 Claude，但 Claude API Key 未配置，请前往「设置」配置")
     return call_claude_stream(messages, max_tokens)
 
 

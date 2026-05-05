@@ -94,7 +94,7 @@ export default function NavSidebar() {
 
       {/* Fetch history */}
       {fetchHistory.length > 0 && (
-        <div className="mt-8 px-3 flex-1 min-h-0 flex flex-col">
+        <div className="mt-5 px-3 flex-1 min-h-0 flex flex-col">
           <button
             onClick={() => setHistoryCollapsed(!historyCollapsed)}
             className="flex items-center gap-1.5 px-3.5 py-1.5 text-[12px] text-muted font-medium hover:text-text/70 transition-colors"
@@ -112,7 +112,7 @@ export default function NavSidebar() {
                 transition={{ duration: 0.2, ease: 'easeInOut' }}
                 style={{ overflow: 'hidden' }}
               >
-                <div className="overflow-y-auto scrollbar-auto space-y-0.5 pr-0.5" style={{ maxHeight: `${34 * 5 + 17 + 10}px` }}>
+                <div className="overflow-y-auto scrollbar-auto space-y-0.5 pr-0.5" style={{ maxHeight: '125px' }}>
                   {fetchHistory.map((item) => {
                     const isActive = activeFetchHistoryId === item.id && activeView === 'fetch'
                     const isHovered = hoveredHistoryId === item.id

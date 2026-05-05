@@ -20,7 +20,6 @@ from pydantic import BaseModel
 from llm_client import (
     check_config, get_config_values, estimate_debate_cost, test_connection,
     reset_clients, set_runtime_config, get_provider_config,
-    call_claude_stream, call_gpt_stream, call_claude, call_gpt,
     call_for_role, call_for_role_stream, get_role_model_config,
     get_token_stats, reset_token_stats,
     call_llm, call_llm_stream, check_llm_available, check_role_models_available,
@@ -294,6 +293,8 @@ def _friendly_error(e: Exception) -> str:
     if "403" in msg or "no access" in low:
         return "模型访问被拒，请前往「设置」检查 API Key 权限"
     if "401" in msg or "unauthorized" in low:
+        if "one_api" in low or "令牌" in low:
+            return "中转站令牌暂时失效，请重试。反复失败请检查中转站余额或更换令牌"
         return "API Key 无效，请前往「设置」更新"
     if "timeout" in low or "timed out" in low:
         return "模型响应超时，请再试一次"
@@ -920,11 +921,11 @@ def _sse(event: str, data: dict) -> str:
 def _provider_for_role(role: str, ctx: SessionContext | None = None) -> str:
     """返回角色对应的模型提供商（claude/gpt）。"""
     if ctx:
-        return ctx.get_role_model_config().get(role, "claude")
+        return ctx.get_role_model_config().get(role, "gpt")
     thread_ctx = get_thread_session()
     if thread_ctx:
-        return thread_ctx.get_role_model_config().get(role, "claude")
-    return get_role_model_config().get(role, "claude")
+        return thread_ctx.get_role_model_config().get(role, "gpt")
+    return get_role_model_config().get(role, "gpt")
 
 # ============================================================
 # Pydantic models
@@ -2175,6 +2176,7 @@ def start_debate(req: StartDebateRequest, request: Request):
 
     def event_stream() -> Generator[str, None, None]:
         set_thread_session(ctx)
+        print(f"[Debate] session={ctx.session_id} role_map={ctx._role_model_map} gpt_key_set={bool(ctx.get_config('GPT')['api_key'])}")
         # 预检：讨论使用的角色模型可用性
         role_ok, role_err = check_role_models_available()
         if not role_ok:

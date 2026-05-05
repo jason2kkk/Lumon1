@@ -13,7 +13,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Generator
 
-from llm_client import call_claude, record_usage, get_provider_config
+from llm_client import call_llm, record_usage, get_provider_config
 from prompts import DEEP_DIVE_SEARCH_PLAN_PROMPT
 
 
@@ -141,7 +141,7 @@ def generate_search_plan(product_proposal: str) -> dict:
             ),
         },
     ]
-    resp = call_claude(messages)
+    resp = call_llm(messages)
 
     try:
         return json.loads(resp)
@@ -310,7 +310,7 @@ def investor_competitor_web_context(
 
     body_en = _investor_body_for_tavily_queries(need_title, need_description, posts_compact, user_input)
     try:
-        raw = call_claude(
+        raw = call_llm(
             [
                 {
                     "role": "system",
@@ -970,9 +970,9 @@ def _tavily_search_competitors(need_title: str, need_description: str, posts_hin
         {"role": "user", "content": prompt},
     ]
     try:
-        return call_claude(messages)
+        return call_llm(messages)
     except Exception as e:
-        print(f"[Tavily competitor → Claude] parse failed: {e}")
+        print(f"[Tavily competitor → LLM] parse failed: {e}")
         return None
 
 
